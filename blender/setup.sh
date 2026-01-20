@@ -1,0 +1,1 @@
+/home/user/Documents/blender-4.3.2-linux-x64/4.3/python/bin/python3.11 -m pip install torch torchvision torchaudio kornia pillow tqdm opencv-python objaverse --extra-index-url https://download.pytorch.org/whl/cu114

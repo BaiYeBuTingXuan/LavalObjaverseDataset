@@ -1,0 +1,38 @@
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386256)
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386257)
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386258)
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386259)
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386260)
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386261)
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386262)
+2026-02-03 18:23:47 | 3386172 | INFO     | Started worker on GPU 0 (PID: 3386263)
+2026-02-03 18:23:47 | 3386172 | INFO     | Found 30 training subsets (89644 total objects)
+2026-02-03 18:23:47 | 3386172 | INFO     |
+======================================================================
+2026-02-03 18:23:47 | 3386172 | INFO     | PROCESSING SUBSET 1/30: subset_0
+2026-02-03 18:23:47 | 3386172 | INFO     | Objects: 2989 | Path: /home/user/Documents/research/LavalObjaverseDataset/rendered/training/subset_0
+2026-02-03 18:23:47 | 3386172 | INFO     | ======================================================================
+2026-02-03 18:23:47 | 3386172 | INFO     | Queueing 2989 objects for /home/user/Documents/research/LavalObjaverseDataset/rendered/training/subset_0 (subset 1/30)
+2026-02-03 18:24:17 | 3386172 | INFO     | ✓ Subset completed: 2989 objects rendered at /home/user/Documents/research/LavalObjaverseDataset/rendered/training/subset_0
+2026-02-03 18:24:17 | 3386172 | INFO     |
+======================================================================
+2026-02-03 18:24:17 | 3386172 | INFO     | PROCESSING SUBSET 2/30: subset_1
+2026-02-03 18:24:17 | 3386172 | INFO     | Objects: 2989 | Path: /home/user/Documents/research/LavalObjaverseDataset/rendered/training/subset_1
+2026-02-03 18:24:17 | 3386172 | INFO     | ======================================================================
+2026-02-03 18:24:17 | 3386172 | INFO     | Queueing 2989 objects for /home/user/Documents/research/LavalObjaverseDataset/rendered/training/subset_1 (subset 2/30)
+2026-02-03 18:24:38 | 3386172 | ERROR    | KeyboardInterrupt received - terminating workers...
+2026-02-03 18:24:38 | 3386172 | INFO     |
+======================================================================
+2026-02-03 18:24:38 | 3386172 | INFO     | SESSION COMPLETE | Total rendered: 5978
+2026-02-03 18:24:38 | 3386172 | INFO     | Log file: logs/render_20260203_182345.log
+2026-02-03 18:24:38 | 3386172 | INFO     | ======================================================================
+Traceback (most recent call last):
+  File "/home/user/Documents/research/LavalObjaverseDataset/blender/distrubte-rendering.py", line 603, in <module>
+    main()
+  File "/home/user/Documents/research/LavalObjaverseDataset/blender/distrubte-rendering.py", line 520, in main
+    rendered_count = rendering(
+                     ^^^^^^^^^^
+  File "/home/user/Documents/research/LavalObjaverseDataset/blender/distrubte-rendering.py", line 432, in rendering
+    time.sleep(30)  # Report every 30 seconds
+    ^^^^^^^^^^^^^^
+KeyboardInterrupt

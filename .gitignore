@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ==============================
 # BYTECODE & PYTHON CACHES
 # ==============================
@@ -192,3 +193,14 @@ keys/
 *.bak
 *.old
 *.orig
+=======
+src/
+./agreements/
+data/
+*.exr
+*.glb
+# *.npy
+credential.json
+pwd/*
+log/*
+>>>>>>> d8a3a11 (for pulling)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import json
 import random
 import argparse
@@ -50,11 +51,13 @@ def split_json_list(input_file, output_prefix, num_splits, seed=None):
         end = start + size
         splits.append(shuffled[start:end])
         start = end
-    
+    output_dir = os.path.dirname(output_prefix)  # 假設 output_prefix 包含路徑
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     # Write output files
     output_files = []
     for i, split_data in enumerate(splits):
-        output_path = f"{output_prefix}_{i+1}.json"
+        output_path = f"{output_prefix}_{i}.json"
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(split_data, f, indent=2, ensure_ascii=False)
         output_files.append(output_path)
@@ -76,7 +79,7 @@ def main():
     )
     parser.add_argument(
         "-o", "--output-prefix",
-        default="split",
+        default='./objaverse/info/training_subsets/subset',
         help="Prefix for output filenames (default: split)"
     )
     parser.add_argument(

@@ -1,0 +1,72 @@
+_wandb:
+    value:
+        cli_version: 0.24.1
+        e:
+            m3v1mklh1htpshc6sb5u7nn2flck8h39:
+                codePath: blender/distrubte-rendering.py
+                codePathLocal: blender/distrubte-rendering.py
+                cpu_count: 20
+                cpu_count_logical: 28
+                cudaVersion: "12.7"
+                disk:
+                    /:
+                        total: "1967317549056"
+                        used: "1469713977344"
+                email: hejunwangzju@gmail.com
+                executable: /home/user/anaconda3/envs/laval-objaverse-dataset/bin/python
+                git:
+                    commit: 1313a9f09f766ffc1127ef777160c195e27dfd0e
+                    remote: https://github.com/BaiYeBuTingXuan/LavalObjaverseDataset.git
+                gpu: NVIDIA GeForce RTX 3090
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10496
+                      memoryTotal: "25769803776"
+                      name: NVIDIA GeForce RTX 3090
+                      uuid: GPU-e00215b9-46fe-990b-9e96-619b1ce520ab
+                host: martin-qt418
+                memory:
+                    total: "67173449728"
+                os: Linux-6.8.0-90-generic-x86_64-with-glibc2.35
+                program: /home/user/Documents/research/LavalObjaverseDataset/blender/distrubte-rendering.py
+                python: CPython 3.11.14
+                root: /home/user/Documents/research/LavalObjaverseDataset
+                startedAt: "2026-02-03T10:27:26.949015Z"
+                writerId: m3v1mklh1htpshc6sb5u7nn2flck8h39
+        m: []
+        python_version: 3.11.14
+        t:
+            "3":
+                - 16
+            "4": 3.11.14
+            "5": 0.24.1
+            "12": 0.24.1
+            "13": linux-x86_64
+blender:
+    value: /home/user/Documents/application/blender-4.3.2-linux-x64/blender
+credentials_file:
+    value: null
+gpus:
+    value:
+        - 0
+log_to_wandb:
+    value: true
+remote_ip:
+    value: null
+remote_path:
+    value: null
+remote_pwd:
+    value: null
+seed:
+    value: 0
+skip_exist:
+    value: true
+split:
+    value: training
+upload:
+    value: false
+upload_retries:
+    value: 3
+workers_per_gpu:
+    value: 8

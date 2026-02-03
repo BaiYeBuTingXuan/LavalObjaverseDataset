@@ -1,0 +1,1 @@
+python render.py --split training --upload --upload_retries 5

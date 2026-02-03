@@ -28,18 +28,10 @@ import shutil
 import torch
 import cv2
 import copy
-from utils.pose_sample import RandomIterator, EulerAngleIterator
-from scripts.generate_bg_and_rotate_envir_map import per_env_per_pose, read_hdr
+import hashlib
 
-# ENV_PATH = os.path.abspath('../../dataset/lighting/test_4')
-# ENV_NAME = [
-#     # 'none',
-#     '012_hdrmaps_com_free_2K.exr', 
-#     '045_hdrmaps_com_free_2K.exr', 
-#     '087_hdrmaps_com_free_2K.exr', 
-#     '109_hdrmaps_com_free_2K.exr'
-# ]
-# BASE_ENV = 0
+LIGHTING_INFO = './laval/info/full_[split]_lighting.json'
+VIEW_INFO = './view/info/full_[split]_view.json'
 
 DEPTH_SCALE = 1
 
@@ -47,14 +39,117 @@ context = bpy.context
 scene = context.scene
 render = scene.render
 
-def get_environment(path):
-    # Use '**/*.exr' to match .exr files in the specified path and all its subdirectories
-    exr_list = glob(os.path.join(path, '**', '*.exr'), recursive=True)
-    hdr_list = glob(os.path.join(path, '**', '*.hdr'), recursive=True)
-    env_list = exr_list + hdr_list
-    env_list.sort()
-    env_list = [os.path.abspath(env) for env in env_list]
-    return env_list
+LIGHTING_DIR = "./laval/preprocessed"
+VIEW_DIR = "./view/src"
+
+
+N_LIGHTINGS = 16
+N_VIEWS = {
+    "training": 16,
+    "testing": 200,
+    "validation": 200,
+}
+
+def find_key_by_value(d, item):
+    for key, lst in d.items():
+        if item in lst:
+            return key
+    return None  # Item not found
+
+def get_lighting(seed, json_path, N=16):
+    """
+    Select N environments deterministically seeded by `name`.
+    
+    Guarantees:
+    - Exactly N//2 items from "Indoor" and N//2 from "Outdoor"
+    - First 4 items contain exactly 2 Indoor and 2 Outdoor
+    
+    Args:
+        name (str): String used as seed for deterministic selection
+        N (int): Total number of environments to select (must be even)
+        json_path (str): Path to JSON file with {"Indoor": [...], "Outdoor": [...]}
+    
+    Returns:
+        list: Selected environment names
+    """
+    if N % 2 != 0:
+        raise ValueError("N must be even to split equally between Indoor/Outdoor")
+    
+    # Load environment lists
+    with open(json_path, 'r') as f:
+        env_data = json.load(f)
+    
+    indoor_list = env_data["Indoor"]
+    outdoor_list = env_data["Outdoor"]
+    
+
+    # Calculate selection counts
+    half_n = N // 2
+    first_half_indoor = 2  # Required for first 4 items constraint
+    first_half_outdoor = 2
+    remaining_indoor = half_n - first_half_indoor
+    remaining_outdoor = half_n - first_half_outdoor
+    
+    if len(indoor_list) < half_n or len(outdoor_list) < half_n:
+        raise ValueError(f"Need at least {half_n} items in both Indoor and Outdoor lists")
+    
+    # Select items deterministically
+    shuffled_indoor = indoor_list[:]
+    random.Random(seed).shuffle(shuffled_indoor)
+
+    shuffled_outdoor = outdoor_list[:]
+    random.Random(seed).shuffle(shuffled_outdoor)
+    selected_indoor = shuffled_indoor[:half_n]
+    selected_outdoor = shuffled_outdoor[:N - half_n]
+    
+    # Construct result with constraint on first 4 items
+    result = []
+    # First 4: 2 Indoor + 2 Outdoor (interleaved for balance)
+    result.extend(selected_indoor[:first_half_indoor])
+    result.extend(selected_outdoor[:first_half_outdoor])
+    
+    # Remaining items: append rest of selections
+    result.extend(selected_indoor[first_half_indoor:])
+    result.extend(selected_outdoor[first_half_outdoor:])
+    
+    # Optional: shuffle remaining items (positions 4+) while preserving first 4 constraint
+    if len(result) > 4:
+        tail = result[4:]
+        random.Random(seed).shuffle(tail)
+        result = result[:4] + tail
+    
+    return result
+
+def get_view(seed, json_path, N=16):
+    """
+    Load environment list from JSON and optionally sample N items deterministically.
+    
+    Args:
+        name (str): String used as seed for deterministic sampling
+        json_path (str): Path to JSON file containing a flat list of environment paths
+        N (int, optional): Number of items to sample. If None, return full list.
+    
+    Returns:
+        list: Full list (if N=None) or sampled list of N items
+    """
+
+    # Load JSON list
+    with open(json_path, 'r') as f:
+        view_list = json.load(f)
+    
+    # Validate JSON structure
+    if not isinstance(view_list, list):
+        raise ValueError(f"JSON file must contain a flat list, got {type(view_list)}")
+    
+    # Return full list if N not specified
+    if N is None or N >= len(view_list):
+        return view_list.copy()  # Return copy to avoid external mutation
+    
+    # Sample N items deterministically
+    shuffled= view_list[:]
+    random.Random(seed).shuffle(shuffled)
+    selected = shuffled[:N]
+    return selected
 
 # add environment map as the lighting condition
 def add_light_env(env=(1, 1, 1, 1), strength=1, rot_vec_rad=(0, 0, 0), scale=(1, 1, 1)):
@@ -138,7 +233,6 @@ def remove_unwanted_objects():
             for node in o.active_material.node_tree.nodes:
                 if node.type == 'EMISSION':
                     objs.append(o)
-               
     bpy.ops.object.delete({'selected_objects': objs})
 
 def reset_scene():
@@ -309,15 +403,17 @@ def pattern_file_exists(pattern: str) -> bool:
     Returns:
         bool: True if at least one matching file exists, False otherwise.
     """
-    return bool(glob.glob(pattern))
+    return bool(glob(pattern))
 
 def main(args):
+    if args.timing:
+        start_time = time.perf_counter()
     depth_file_output, normal_file_output, albedo_file_output = reset_scene()
     object_name = args.object_name
     # with open(args.objaverse_info, 'r') as file:
     #     object_info = json.load(file)[object_name]
     os.makedirs(os.path.join(args.output_dir, 'temp'),exist_ok=True)
-    TEMP_PATH = os.path.join(args.output_dir, 'temp', f'temp_{args.object_name}.glb')
+    TEMP_PATH = os.path.join(args.output_dir, 'temp', f'temp_{object_name}.glb')
     # print(0)
     download(object_name, TEMP_PATH)
     # print(0)
@@ -326,181 +422,145 @@ def main(args):
     normalize_scene()
 
     camera = bpy.context.scene.camera
-    camera.location = (0,1.5,0)
-    
-    cam_constraint = camera.constraints.new(type="TRACK_TO")
-    cam_constraint.track_axis = "TRACK_NEGATIVE_Z"
-    cam_constraint.up_axis = "UP_Y"
+    # cam_constraint = camera.constraints.new(type="TRACK_TO")
+    # cam_constraint.track_axis = "TRACK_NEGATIVE_Z"
+    # cam_constraint.up_axis = "UP_Y"
 
-    b_empty = bpy.data.objects.new("Empty", None)
-    b_empty.location = (0, 0, 0)
-    camera.parent = b_empty
-
-    bpy.context.scene.collection.objects.link(b_empty)
-    bpy.context.view_layer.objects.active = b_empty
-    cam_constraint.target = b_empty
-
-    env_list = get_environment(args.lighting_dir)
+    seed = int(hashlib.sha256(object_name.encode()).hexdigest(), 16) % (2**32)
+    lightings = {}
+    for split in args.lighting_split:
+        lightings[split] = get_lighting(seed, LIGHTING_INFO.replace("[split]", split), N=N_LIGHTINGS)
+    views = {}
+    for split in args.view_split:
+        views[split] = get_view(seed, VIEW_INFO.replace("[split]", split), N=N_VIEWS[split])
     infos = {}
     infos['basic'] = \
         {
             "object_name": object_name,
-            # "3D_model_path":object_info['save_path'],
             "focal": camera.data.lens,
-            "sensor_size": [camera.data.sensor_width,camera.data.sensor_width] ,
+            "sensor_size": [camera.data.sensor_width, camera.data.sensor_width] ,
             "image_size": [render.resolution_x, render.resolution_y],
-            "environment": [env_list[i] for i in range(len(env_list))],
-            "train_size": args.trainset_size,
-            "test_size": args.testset_size,
-            "depth_scale": DEPTH_SCALE
+            "lighting": lightings,
+            "view": views,
+            "depth_scale": DEPTH_SCALE,
+            "object_scale": args.scale,
+            "camera_angle_x": 2.0 * math.atan(camera.data.sensor_width / (2.0 * camera.data.lens))
         }
-    infos['train'] = []
-    infos['test'] = []
+    infos['images'] = []
     
-    for i, env_path in enumerate(env_list):
-        add_light_env(env_path)
-        # resized_env_map = bpy_image_2_torch(env_map, size=(render.resolution_x, render.resolution_y))
+    for i, lighting in enumerate([item for sublist in lightings.values() for item in sublist]):
+        add_light_env(os.path.join(LIGHTING_DIR, lighting))
+        for j, view in enumerate([item for sublist in views.values() for item in sublist]):
+            save_path = os.path.join(args.output_dir, object_name)
 
-        def render_image(euler_iter, split):
-            assert split in ['train', 'test', 'valid'], False
-            # for j, (location, direction) in enumerate(camera_iter):
-            save_path = os.path.join(args.output_dir, 'objects', object_name, split)
+            transform = np.load(os.path.join(VIEW_DIR, view))
 
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
+            # Validate matrix shape
+            if transform.shape != (4, 4):
+                raise ValueError(f"Expected 4x4 pose matrix, got shape {transform.shape}")
 
-            for j, euler in enumerate(euler_iter):
-                b_empty.rotation_euler = euler
-                bpy.context.view_layer.update()
-                # In Neural Gaffer, they use decompose to let CAMERA World Pose to Rotation Euler and Location, then transfer to Matrix form
-                # But in this work, we prevent scaling on Camera
-                # pose: 001_pose.npy
-                pose = np.array(camera.matrix_world)
+            camera.matrix_world = Matrix(transform.tolist())
 
-                if args.pose:
-                    pose_save_path = os.path.join(save_path, f'{j:03d}_pose')
-                    np.save(os.path.join(pose_save_path), pose)
+            # Force scene update to propagate transform to camera
+            bpy.context.view_layer.update()
 
-                infos[split].append(
-                            {   
-                                "image_name": f'{j:03d}_{i:03d}',
-                                'pose_id': f"{j:03d}",
-                                'environment': env_path,
-                                "transform": copy.deepcopy(pose.tolist()),
-                            }
-                        )
+            assert np.allclose(transform, np.array(camera.matrix_world), atol=1e-6), \
+                f"Pose mismatch:\nComputed:\n{transform}\nCamera:\n{np.array(camera.matrix_world)}"
+            image_stem = view.split('.')[0] + '&'+ lighting.replace('/', '_').split('.')[0]
 
-                # image: 001_003_image.png
-                if not args.no_rgb:
-                    scene.render.filepath = os.path.join(save_path, f'{j:03d}_{i:03d}_image')
-                else:
-                    # 清空 filepath，避免寫出 RGB
-                    scene.render.filepath = ''  
-                    if i > 0: # not write depth or albedo anymore
-                        continue
-
-
-                if args.skip_exist and os.path.exists(scene.render.filepath+'.png'):
-                    try:
-                        img = cv2.imread(scene.render.filepath+'.png')
-                        if img is not None:
-                            height, width, _ = img.shape
-                            if (width, height) == (render.resolution_x, render.resolution_y):
-                                if i == 0:
-                                    normal_exist = args.albedo and pattern_file_exists(os.path.join(save_path, f'{j:03d}_normal_*.png'))
-                                    albedo_exist = args.albedo and pattern_file_exists(os.path.join(save_path, f'{j:03d}_albedo_*.png'))
-                                    depth_exist = args.albedo and pattern_file_exists(os.path.join(save_path, f'{j:03d}_depth_*.png'))
-                                    if normal_exist and albedo_exist and depth_exist:
-                                        continue                               
-                                else:
-                                    continue
-                            else:
-                                raise ValueError(f"The image size is {width}x{height} pixels, \
-                                                 not {render.resolution_x}x{render.resolution_x}")
-                    except Exception as e:
-                        print(e)
-
-                # normal: 001_normal.png
-                # albedo: 001_albedo.png
-                # depth: 001_depth.exr
-                if i == 0:
-                    if args.normal:
-                        normal_file_output.file_slots[0].use_node_format = True
-                        normal_file_output.file_slots[0].path = \
-                            os.path.join(save_path, f'{j:03d}_normal_')
-                    if args.albedo:
-                        albedo_file_output.file_slots[0].use_node_format = True
-                        albedo_file_output.file_slots[0].path = \
-                            os.path.join(save_path, f'{j:03d}_albedo_')
-                    if args.depth:
-                        depth_file_output.file_slots[0].use_node_format = True
-                        depth_file_output.file_slots[0].path = \
-                            os.path.join(save_path, f'{j:03d}_depth_')
-                else:
-                    bpy.context.view_layer.use_pass_normal = False
-                    bpy.context.view_layer.use_pass_diffuse_color = False
-                    bpy.context.view_layer.use_pass_z = False
-
-                    depth_file_output.file_slots[0].use_node_format = False
-                    depth_file_output.file_slots[0].path = ''
-
-                    normal_file_output.file_slots[0].use_node_format = False
-                    normal_file_output.file_slots[0].path = ''
-
-                    albedo_file_output.file_slots[0].use_node_format = False
-                    albedo_file_output.file_slots[0].path = ''
-
-                    nodes = bpy.context.scene.node_tree.nodes
-                    # Clear default nodes
-                    # for n in nodes:
-                    #     nodes.remove(n)
-
-
-                # hdr: 001_003_hdr.png
-                # ldr: 001_003_ldr.png
-                if args.env:
-                    target_envir_map_hdr, target_envir_map_ldr, target_envir_map_raw = \
-                        per_env_per_pose(env_path, pose[:3,:3], c2w=True, \
-                                        size=[render.resolution_x, render.resolution_y])
-                    env_map_save_path = os.path.join(args.output_dir, 'environments', split)
-                    if not os.path.exists(env_map_save_path):
-                        os.makedirs(env_map_save_path)
-                    target_envir_map_hdr.save(os.path.join(env_map_save_path, f'{j:03d}_{i:03d}_hdr.png'))
-                    target_envir_map_ldr.save(os.path.join(env_map_save_path, f'{j:03d}_{i:03d}_ldr.png'))
-                    np.save(os.path.join(env_map_save_path, f'{j:03d}_{i:03d}_raw'), target_envir_map_raw)
+            infos['images'].append(
+                        {   
+                            "object_name": args.object_name,
+                            "lighting_split": find_key_by_value(lightings, lighting),
+                            "view_split": find_key_by_value(views, view),
+                            "image_stem": image_stem,
+                            'view': view,
+                            'lighting': lighting,
+                            "transform": copy.deepcopy(transform.tolist()),
+                        }
+                    )
                 
-                bpy.ops.render.render(write_still=True)
-        
-        train_euler = RandomIterator(total_points=args.trainset_size, seed=666)
-        render_image(train_euler, 'train')
-        test_euler = RandomIterator(total_points=args.testset_size, seed=888)
-        render_image(test_euler, 'test')
+            if args.skip_exist and os.path.exists(scene.render.filepath+'.png'):
+                img = cv2.imread(scene.render.filepath+'.png')
+                if img is not None:
+                    height, width, _ = img.shape
+                    if (width, height) == (render.resolution_x, render.resolution_y):
+                        if i == 0:
+                            normal_exist = args.normal and pattern_file_exists(os.path.join(save_path, f'{view}_normal_*.png'))
+                            albedo_exist = args.albedo and pattern_file_exists(os.path.join(save_path, f'{view}_albedo_*.png'))
+                            depth_exist = args.depth and pattern_file_exists(os.path.join(save_path, f'{view}_depth_*.png'))
+                            if normal_exist and albedo_exist and depth_exist:
+                                continue                               
+                        else:
+                            continue
+                    else:
+                        raise ValueError(f"The image size is {width}x{height} pixels, \
+                                            not {render.resolution_x}x{render.resolution_x}")
 
+            # image: 001_003_image.png
+            if args.no_rgb:
+                scene.render.filepath = ''  
+                if i > 0: # not write depth or albedo anymore
+                    continue
+            else:
+                scene.render.filepath = os.path.join(save_path, f'{image_stem}_image')
+
+            # normal: V1_normal_*.png
+            # albedo: V1_albedo_*.png
+            # depth: V1_depth_*.exr
+            if i == 0:
+                view_stem = view.split('.')[0]
+                if args.normal:
+                    normal_file_output.file_slots[0].use_node_format = True
+                    normal_file_output.file_slots[0].path = \
+                        os.path.join(save_path, f'{view_stem}_normal_')
+                if args.albedo:
+                    albedo_file_output.file_slots[0].use_node_format = True
+                    albedo_file_output.file_slots[0].path = \
+                        os.path.join(save_path, f'{view_stem}_albedo_')
+                if args.depth:
+                    depth_file_output.file_slots[0].use_node_format = True
+                    depth_file_output.file_slots[0].path = \
+                        os.path.join(save_path, f'{view_stem}_depth_')
+            else:
+                bpy.context.view_layer.use_pass_normal = False
+                bpy.context.view_layer.use_pass_diffuse_color = False
+                bpy.context.view_layer.use_pass_z = False
+
+                depth_file_output.file_slots[0].use_node_format = False
+                depth_file_output.file_slots[0].path = ''
+
+                normal_file_output.file_slots[0].use_node_format = False
+                normal_file_output.file_slots[0].path = ''
+
+                albedo_file_output.file_slots[0].use_node_format = False
+                albedo_file_output.file_slots[0].path = ''
+
+                nodes = bpy.context.scene.node_tree.nodes
+            bpy.ops.render.render(write_still=True)
+    
     json_output = json.dumps(infos, indent=4)
-    os.makedirs(os.path.join(args.output_dir, 'objects', object_name), exist_ok=True)
-    output_file_path = os.path.join(args.output_dir, 'objects', object_name, "info.json")  # 修改为你的文件路径
+    os.makedirs(os.path.join(args.output_dir, object_name), exist_ok=True)
+    output_file_path = os.path.join(args.output_dir, object_name, "info.json")  # 修改为你的文件路径
     with open(output_file_path, 'w') as json_file:
         json_file.write(json_output)
     print("Dataset info. have been save to", output_file_path)
+    if args.timing:
+        return time.perf_counter() - start_time
+    else:
+        return None
 
 def download(uid, tmp):
     objects = objaverse.load_objects(
         uids=[uid],
         download_processes=1
         )
-    # annotations = objaverse.load_annotations(uid)
     
     file_path = objects[uid]
     if os.path.isfile(file_path): 
-        # new_file_path = os.path.join(args.path, os.path.basename(file_path))
         shutil.copy(file_path, tmp)
         os.remove(file_path)
         
-    # return {
-    #     'uid': uid,
-    #     'uri': annotations[uid]['uri'],
-    #     'name':  annotations[uid]['name']
-    # }
 
 def remove_temp_file(tmp):
     if os.path.isfile(tmp): 
@@ -522,28 +582,39 @@ if __name__ == "__main__":
         help="Path to the Objaverse info json",
     )
     # parsser.add_argument("--output_dir", type=str, default="{args.output_dir}/views_whole_sphere")
-    parser.add_argument("--output_dir", type=str, default="../../dataset/relitObjaverse")
-    parser.add_argument("--lighting_dir", type=str, default="../../dataset/lighting")
-
+    parser.add_argument("--output_dir", type=str, default="./rendered")
 
     parser.add_argument(
         "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
     )
-    parser.add_argument("--scale", type=float, default=0.8)
+    parser.add_argument("--scale", type=float, default=1)
     parser.add_argument("--trainset_size", type=int, default=16)
     parser.add_argument("--testset_size", type=int, default=16)
 
     parser.add_argument("--image_size", type=tuple, default=(512, 512))
-
-
+    
+    parser.add_argument("--timing", action='store_true')
     parser.add_argument("--depth", action='store_true')
     parser.add_argument("--normal", action='store_true')
     parser.add_argument("--albedo", action='store_true')
-    parser.add_argument("--pose", action='store_true')
     parser.add_argument("--no_rgb", action='store_true')
 
+    parser.add_argument(
+        "--lighting_split",
+        type=str,
+        nargs="+",  # Accept 1+ space-separated values
+        default=["training"],  # Default as list for consistency
+        help="Lighting split(s) to use (e.g., 'training', 'validation', 'test')"
+    )
+    parser.add_argument(
+        "--view_split",
+        type=str,
+        nargs="+",
+        default=["training"],
+        help="View split(s) to use (e.g., 'training', 'validation', 'test')"
+    )
 
-    parser.add_argument("--env", action='store_true')
+
     parser.add_argument("--skip_exist", action='store_true')
 
     argv = sys.argv[sys.argv.index("--") + 1 :]
@@ -571,8 +642,8 @@ if __name__ == "__main__":
     render.engine = args.engine
     render.image_settings.file_format = "PNG"
     render.image_settings.color_mode = "RGBA"
-    render.resolution_x = 256
-    render.resolution_y = 256
+    render.resolution_x = args.image_size[0]
+    render.resolution_y = args.image_size[0]
     render.resolution_percentage = 100
 
     scene.cycles.device = "GPU"
@@ -591,7 +662,6 @@ if __name__ == "__main__":
     bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "CUDA" # or "OPENCL"
     args.output_dir = os.path.abspath(args.output_dir)
 
-    try:
-        main(args)
-    except Exception as E:
-        print(E)
+    timing = main(args)
+    if timing is not None:
+        print(timing)

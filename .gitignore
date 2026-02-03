@@ -81,6 +81,7 @@ $RECYCLE.BIN/
 *.blend2
 *.tgz
 *.tar
+*.npy
 
 # Dataset directories (exclude entire trees)
 data/

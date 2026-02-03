@@ -9,3 +9,5 @@ pwd/*
 logs/*
 agreements/*
 wandb/*
+test/
+.vscode/

@@ -74,85 +74,142 @@ class Args:
     credentials_file: Optional[str] = None
     """Path to credentials JSON file (default: ./credentials.json). NOT tracked by git."""
 
-def load_remote_credentials(args: Args) -> Args:
+def upload_and_cleanup(
+    local_path: str,
+    remote_ip: str,
+    remote_pwd: str,
+    remote_base_path: str,
+    save_root: str,  # ADDED: Base rendering directory for relative path extraction
+    max_retries: int = 3
+) -> bool:
     """
-    Load remote credentials from (in order of priority):
-    1. Command-line arguments (already in args)
-    2. Environment variables (REMOTE_IP, REMOTE_PWD, REMOTE_PATH)
-    3. Credentials file (JSON with keys: remote_ip, remote_pwd, remote_path)
+    Upload directory to remote server using PASSWORD authentication.
+    Extracts subset name as relative path from save_root (e.g., 'training/subset_1').
     
-    Returns updated args with credentials populated.
+    Returns:
+        True on success, False if all retries fail.
     """
-    if not args.upload or all([args.remote_ip, args.remote_pwd, args.remote_path]):
-        return args
-
-    logger.info("Loading remote credentials...")
-
-    # 1. Try environment variables
-    env_ip = os.environ.get('REMOTE_IP')
-    env_pwd = os.environ.get('REMOTE_PWD')
-    env_path = os.environ.get('REMOTE_PATH')
+    if not os.path.exists(local_path):
+        logger.warning(f"Upload skipped - path doesn't exist: {local_path}")
+        return False
     
-    if all([env_ip, env_pwd, env_path]):
-        args.remote_ip = env_ip
-        args.remote_pwd = env_pwd
-        args.remote_path = env_path
-        logger.info("✓ Loaded credentials from environment variables")
-        return args
-
-    # 2. Try credentials file
-    cred_files = []
-    if args.credentials_file:
-        cred_files.append(args.credentials_file)
-    else:
-        cred_files.extend([
-            './credentials.json',
-            os.path.expanduser('~/.config/objaverse_remote.json'),
-            os.path.expanduser('~/credentials.json')
-        ])
+    # Extract RELATIVE path from SAVE_ROOT (e.g., 'training/subset_1')
+    try:
+        subset_relpath = os.path.relpath(local_path, save_root)
+        if subset_relpath.startswith('..') or subset_relpath == '.':
+            raise ValueError(f"local_path '{local_path}' is not under save_root '{save_root}'")
+    except Exception as e:
+        logger.error(f"Failed to compute relative path: {e}")
+        subset_relpath = os.path.basename(local_path)  # Fallback
     
-    for cf in cred_files:
-        if os.path.exists(cf):
-            try:
-                with open(cf, 'r') as f:
-                    cred_data = json.load(f)
-                
-                required_keys = ['remote_ip', 'remote_pwd', 'remote_path']
-                if not all(k in cred_data for k in required_keys):
-                    logger.warning(f"Credentials file {cf} missing required keys: {required_keys}")
-                    continue
-                
-                args.remote_ip = args.remote_ip or cred_data['remote_ip']
-                args.remote_pwd = args.remote_pwd or cred_data['remote_pwd']
-                args.remote_path = args.remote_path or cred_data['remote_path']
-                
-                # Security check: warn if file is in git-tracked location
-                if os.path.exists('.git') and os.path.samefile(os.path.dirname(cf), os.getcwd()):
-                    logger.warning(
-                        f"⚠️  Credentials file {cf} is in git-tracked directory! "
-                        "Add it to .gitignore immediately to prevent leaks."
-                    )
-                
-                logger.info(f"✓ Loaded credentials from {cf}")
-                return args
-                
-            except Exception as e:
-                logger.warning(f"Failed to load credentials from {cf}: {e}")
-                continue
+    # Construct remote path preserving hierarchy
+    remote_full_path = os.path.join(remote_base_path, subset_relpath)
+    remote_full_path_quoted = shlex.quote(remote_full_path)
     
-    missing = [k for k, v in [
-        ('remote_ip', args.remote_ip),
-        ('remote_pwd', args.remote_pwd),
-        ('remote_path', args.remote_path)
-    ] if not v]
-    
-    raise ValueError(
-        f"Missing remote credentials for upload: {', '.join(missing)}\n"
-        "Provide via:\n"
-        "  (a) CLI args (--remote_ip, etc.), OR\n"
-        "  (b) Environment variables (REMOTE_IP, REMOTE_PWD, REMOTE_PATH), OR\n"
-        "  (c) Credentials file (default: ./credentials.json with keys: remote_ip, remote_pwd, remote_path)"
-    )
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Upload attempt {attempt}/{max_retries} for {subset_relpath} -> ubuntu@{remote_ip}:{remote_full_path}")
+        
+        try:
+            # Set up environment with password via SSHPASS (secure)
+            env = os.environ.copy()
+            env['SSHPASS'] = remote_pwd
+            
+            # === STEP 1: Create remote directory ===
+            mkdir_cmd = [
+                'sshpass', '-e', 'ssh',
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'ConnectTimeout=10',
+                '-o', 'ServerAliveInterval=30',
+                f'ubuntu@{remote_ip}',
+                f'mkdir -p {remote_full_path_quoted}'
+            ]
+            
+            subprocess.run(
+                mkdir_cmd,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            # === STEP 2: Rsync data ===
+            rsync_cmd = [
+                'sshpass', '-e', 'rsync',
+                '-avz',
+                '--progress',
+                '--exclude=finish.keep',
+                '--rsh=ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30',
+                f'{local_path}/',
+                f'ubuntu@{remote_ip}:{remote_full_path_quoted}/'
+            ]
+            
+            process = subprocess.Popen(
+                rsync_cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            # Stream rsync output (filter noise)
+            for line in process.stdout:
+                stripped = line.strip()
+                if stripped and not any(noise in stripped for noise in [
+                    'sending incremental file list', 'total:', 'speedup is', 'bytes/sec'
+                ]):
+                    logger.debug(f"RSYNC: {stripped}")
+            
+            ret = process.wait(timeout=3600)
+            if ret != 0:
+                raise RuntimeError(f"RSYNC failed with exit code {ret}")
+            
+            # === SUCCESS: Perform cleanup ===
+            logger.info(f"✓ Upload succeeded for {subset_relpath} on attempt {attempt}")
+            
+            # Remove local files (keep directory structure + finish.keep)
+            removed_count = 0
+            for root, dirs, files in os.walk(local_path):
+                for file in files:
+                    if file == "finish.keep":
+                        continue
+                    file_path = os.path.join(root, file)
+                    try:
+                        os.remove(file_path)
+                        removed_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to remove {file_path}: {e}")
+            
+            # Create finish.keep marker with full context
+            marker_path = os.path.join(local_path, "finish.keep")
+            with open(marker_path, 'w') as f:
+                f.write(f"Upload completed at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Local path: {local_path}\n")
+                f.write(f"Relative path: {subset_relpath}\n")
+                f.write(f"Remote destination: ubuntu@{remote_ip}:{remote_full_path}\n")
+                f.write(f"Files removed: {removed_count}\n")
+                f.write(f"Upload attempts: {attempt}/{max_retries}\n")
+            
+            logger.info(f"✓ Cleanup complete. Created marker: {marker_path} ({removed_count} files removed)")
+            return True
+            
+        except subprocess.TimeoutExpired as e:
+            error_msg = f"Timeout after {e.timeout}s"
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Command failed (exit {e.returncode}): {e.stderr[:300] if e.stderr else 'no stderr'}"
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)[:300]}"
+        
+        logger.warning(f"Upload attempt {attempt} failed for {subset_relpath}: {error_msg}")
+        
+        if attempt < max_retries:
+            backoff = min(2 ** (attempt - 1), 30)  # Exponential backoff capped at 30s
+            logger.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+        else:
+            logger.error(f"✗ All {max_retries} upload attempts failed for {subset_relpath}. SKIPPING cleanup.")
+            return False
 
 def upload_and_cleanup(
     local_path: str,

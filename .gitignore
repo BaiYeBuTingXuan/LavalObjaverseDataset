@@ -1,13 +1,193 @@
-src/
-./agreements/
-data/
-*.exr
-*.glb
-# *.npy
+# ==============================
+# BYTECODE & PYTHON CACHES
+# ==============================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.cache/
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ==============================
+# CREDENTIALS & SECRETS (CRITICAL)
+# ==============================
+# NEVER commit credentials
+credentials.json
 credential.json
-pwd/*
-logs/*
-agreements/*
-wandb/*
-test/
+credentials*.json
+*.env
+.env*
+secrets/
+secrets.json
+config/credentials.json
+config/secrets.json
+# Prevent accidental commits of credential templates
+credentials.json.template
+
+# ==============================
+# LOGS & TEMPORARY FILES
+# ==============================
+logs/
+*.log
+*.log.*
+log/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ==============================
+# RENDERING OUTPUT & DATA
+# ==============================
+# Render artifacts (large binary files)
+*.exr
+*.hdr
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.glb
+*.gltf
+*.fbx
+*.obj
+*.mtl
+*.blend1
+*.blend2
+*.tgz
+*.tar
+
+# Dataset directories (exclude entire trees)
+data/
+rendered/
+objects/
+output/
+results/
+
+# ==============================
+# ML & EXPERIMENT TRACKING
+# ==============================
+wandb/
+.mlflow/
+runs/
+checkpoints/
+models/
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.onnx
+
+# ==============================
+# IDE & EDITOR FILES
+# ==============================
 .vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.vs/
+*.vscode/
+*.code-workspace
+*.project
+*.pydevproject
+*.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ==============================
+# SYSTEM & OS ARTIFACTS
+# ==============================
+# Linux
+*~
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ==============================
+# PROJECT-SPECIFIC EXCLUDES
+# ==============================
+# Blender installation (large binary distribution)
+blender-*/ 
+blender-*-linux-x64/
+blender-*-windows-x64/
+blender-*-macos/
+
+# Agreements & legal docs (often contain PII)
+agreements/
+./agreements/  # Redundant but safe to keep both forms
+
+# Test directories (temporary outputs)
+test/
+tests/
+testing/
+
+# Password-protected directories (security critical)
+pwd/
+passwords/
+secrets/
+keys/
+
+# ==============================
+# NETWORK & LOCK FILES
+# ==============================
+*.lock
+!.gitignore.lock  # Exception: keep gitignore.lock if used
+*.pid
+*.sock
+
+# ==============================
+# MISCELLANEOUS
+# ==============================
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Editors
+*.kate-swp
+*.gedit-save
+
+# Backup files
+*.*~
+*.bak
+*.old
+*.orig

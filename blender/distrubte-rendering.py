@@ -41,7 +41,7 @@ class Args:
 
     split: str = 'training'
 
-    blender: str = '/home/user/Documents/application/blender-4.3.2-linux-x64/blender'
+    blender: str = './blender/blender-4.3.2-linux-x64/blender'
     """Blender executable path"""
 
     log_to_wandb: bool = True

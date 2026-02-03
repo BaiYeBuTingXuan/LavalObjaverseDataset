@@ -8,3 +8,4 @@ credential.json
 pwd/*
 logs/*
 agreements/*
+wandb/*

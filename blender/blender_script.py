@@ -480,9 +480,6 @@ def main(args):
                         }
                     )
             
-            if i > 4:
-                continue # TODO: control the progress
-
             # image: 001_003_image.png
             if args.no_rgb:
                 scene.render.filepath = ''  

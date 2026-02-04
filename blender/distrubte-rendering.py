@@ -71,8 +71,8 @@ class Args:
     remote_path: Optional[str] = None
     """Remote base path (loaded from env/credentials file if not provided)"""
 
-    credentials_file: Optional[str] = None
-    """Path to credentials JSON file (default: ./credentials.json). NOT tracked by git."""
+    credentials_file: Optional[str] = 'credential.json'
+    """Path to credentials JSON file (default: ./credentials.json)."""
 
 def upload_and_cleanup(
     local_path: str,

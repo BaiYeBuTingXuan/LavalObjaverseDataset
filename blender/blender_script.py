@@ -479,7 +479,15 @@ def main(args):
                             "transform": copy.deepcopy(transform.tolist()),
                         }
                     )
-                
+            
+            # image: 001_003_image.png
+            if args.no_rgb:
+                scene.render.filepath = ''  
+                if i > 0: # not write depth or albedo anymore
+                    continue
+            else:
+                scene.render.filepath = os.path.join(save_path, f'{image_stem}_image')
+
             if args.skip_exist and os.path.exists(scene.render.filepath+'.png'):
                 img = cv2.imread(scene.render.filepath+'.png')
                 if img is not None:
@@ -496,15 +504,6 @@ def main(args):
                     else:
                         raise ValueError(f"The image size is {width}x{height} pixels, \
                                             not {render.resolution_x}x{render.resolution_x}")
-
-            # image: 001_003_image.png
-            if args.no_rgb:
-                scene.render.filepath = ''  
-                if i > 0: # not write depth or albedo anymore
-                    continue
-            else:
-                scene.render.filepath = os.path.join(save_path, f'{image_stem}_image')
-
             # normal: V1_normal_*.png
             # albedo: V1_albedo_*.png
             # depth: V1_depth_*.exr

@@ -11,7 +11,9 @@ from typing import Optional
 import tyro
 import wandb
 import shlex
-from utils import get_subset_json_files
+from utils import get_subset_json_files, load_remote_credentials
+from typing import Dict, Literal
+import shutil
 
 # ===== LOGGING SETUP (DO THIS FIRST) =====
 LOG_DIR = "logs"
@@ -56,7 +58,7 @@ class Args:
     seed: int = 0
     """Random seed"""
 
-    upload: bool = False
+    upload: bool = True
     """Upload rendered subsets to remote server after completion"""
 
     upload_retries: int = 3
@@ -65,246 +67,137 @@ class Args:
     remote_ip: Optional[str] = None
     """Remote server IP (loaded from env/credentials file if not provided)"""
 
+    remote_user: Optional[str] = None
+    """Remote server IP (loaded from env/credentials file if not provided)"""
+
     remote_pwd: Optional[str] = None
     """Remote server password (loaded from env/credentials file if not provided)"""
 
     remote_path: Optional[str] = None
     """Remote base path (loaded from env/credentials file if not provided)"""
 
-    credentials_file: Optional[str] = 'credential.json'
+    credentials_file: Optional[str] = None
     """Path to credentials JSON file (default: ./credentials.json)."""
 
 def upload_and_cleanup(
     local_path: str,
     remote_ip: str,
-    remote_pwd: str,
-    remote_base_path: str,
-    save_root: str,  # ADDED: Base rendering directory for relative path extraction
+    remote_user: str,
+    remote_auth: Dict[str, str],  # {'method': 'password', 'value': 'pwd'} OR {'method': 'key', 'value': '/path/to/key'}
+    remote_path: str,
     max_retries: int = 3
 ) -> bool:
     """
-    Upload directory to remote server using PASSWORD authentication.
-    Extracts subset name as relative path from save_root (e.g., 'training/subset_1').
-    
-    Returns:
-        True on success, False if all retries fail.
-    """
-    if not os.path.exists(local_path):
-        logger.warning(f"Upload skipped - path doesn't exist: {local_path}")
-        return False
-    
-    # Extract RELATIVE path from SAVE_ROOT (e.g., 'training/subset_1')
-    try:
-        subset_relpath = os.path.relpath(local_path, save_root)
-        if subset_relpath.startswith('..') or subset_relpath == '.':
-            raise ValueError(f"local_path '{local_path}' is not under save_root '{save_root}'")
-    except Exception as e:
-        logger.error(f"Failed to compute relative path: {e}")
-        subset_relpath = os.path.basename(local_path)  # Fallback
-    
-    # Construct remote path preserving hierarchy
-    remote_full_path = os.path.join(remote_base_path, subset_relpath)
-    remote_full_path_quoted = shlex.quote(remote_full_path)
-    
-    for attempt in range(1, max_retries + 1):
-        logger.info(f"Upload attempt {attempt}/{max_retries} for {subset_relpath} -> ubuntu@{remote_ip}:{remote_full_path}")
-        
-        try:
-            # Set up environment with password via SSHPASS (secure)
-            env = os.environ.copy()
-            env['SSHPASS'] = remote_pwd
-            
-            # === STEP 1: Create remote directory ===
-            mkdir_cmd = [
-                'sshpass', '-e', 'ssh',
-                '-o', 'StrictHostKeyChecking=no',
-                '-o', 'ConnectTimeout=10',
-                '-o', 'ServerAliveInterval=30',
-                f'ubuntu@{remote_ip}',
-                f'mkdir -p {remote_full_path_quoted}'
-            ]
-            
-            subprocess.run(
-                mkdir_cmd,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            # === STEP 2: Rsync data ===
-            rsync_cmd = [
-                'sshpass', '-e', 'rsync',
-                '-avz',
-                '--progress',
-                '--exclude=finish.keep',
-                '--rsh=ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o ServerAliveInterval=30',
-                f'{local_path}/',
-                f'ubuntu@{remote_ip}:{remote_full_path_quoted}/'
-            ]
-            
-            process = subprocess.Popen(
-                rsync_cmd,
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
-            )
-            
-            # Stream rsync output (filter noise)
-            for line in process.stdout:
-                stripped = line.strip()
-                if stripped and not any(noise in stripped for noise in [
-                    'sending incremental file list', 'total:', 'speedup is', 'bytes/sec'
-                ]):
-                    logger.debug(f"RSYNC: {stripped}")
-            
-            ret = process.wait(timeout=3600)
-            if ret != 0:
-                raise RuntimeError(f"RSYNC failed with exit code {ret}")
-            
-            # === SUCCESS: Perform cleanup ===
-            logger.info(f"✓ Upload succeeded for {subset_relpath} on attempt {attempt}")
-            
-            # Remove local files (keep directory structure + finish.keep)
-            removed_count = 0
-            for root, dirs, files in os.walk(local_path):
-                for file in files:
-                    if file == "finish.keep":
-                        continue
-                    file_path = os.path.join(root, file)
-                    try:
-                        os.remove(file_path)
-                        removed_count += 1
-                    except Exception as e:
-                        logger.warning(f"Failed to remove {file_path}: {e}")
-            
-            # Create finish.keep marker with full context
-            marker_path = os.path.join(local_path, "finish.keep")
-            with open(marker_path, 'w') as f:
-                f.write(f"Upload completed at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Local path: {local_path}\n")
-                f.write(f"Relative path: {subset_relpath}\n")
-                f.write(f"Remote destination: ubuntu@{remote_ip}:{remote_full_path}\n")
-                f.write(f"Files removed: {removed_count}\n")
-                f.write(f"Upload attempts: {attempt}/{max_retries}\n")
-            
-            logger.info(f"✓ Cleanup complete. Created marker: {marker_path} ({removed_count} files removed)")
-            return True
-            
-        except subprocess.TimeoutExpired as e:
-            error_msg = f"Timeout after {e.timeout}s"
-        except subprocess.CalledProcessError as e:
-            error_msg = f"Command failed (exit {e.returncode}): {e.stderr[:300] if e.stderr else 'no stderr'}"
-        except Exception as e:
-            error_msg = f"{type(e).__name__}: {str(e)[:300]}"
-        
-        logger.warning(f"Upload attempt {attempt} failed for {subset_relpath}: {error_msg}")
-        
-        if attempt < max_retries:
-            backoff = min(2 ** (attempt - 1), 30)  # Exponential backoff capped at 30s
-            logger.info(f"Retrying in {backoff}s...")
-            time.sleep(backoff)
-        else:
-            logger.error(f"✗ All {max_retries} upload attempts failed for {subset_relpath}. SKIPPING cleanup.")
-            return False
-
-def upload_and_cleanup(
-    local_path: str,
-    remote_ip: str,
-    remote_auth: dict,  # {'method': 'password', 'value': 'pwd'} OR {'method': 'key', 'value': '/path/to/key'}
-    remote_base_path: str,
-    remote_user: str = "ubuntu",
-    max_retries: int = 3
-) -> bool:
-    """
-    Upload directory to remote server with retry logic.
+    Upload directory to remote server with retry logic and local cleanup.
     Supports BOTH password AND SSH key authentication securely.
     
     Args:
+        local_path: Local directory path to upload
+        remote_ip: Remote server IP/hostname
+        remote_user: Remote username
         remote_auth: Dict with keys:
             - method: 'password' or 'key'
             - value: password string OR path to private key file
+        remote_path: Base remote path (subset hierarchy preserved under this)
+        max_retries: Maximum upload attempts (default: 3)
     
     Returns:
         True on success, False if all retries fail.
+    
+    Security Notes:
+        - Password auth requires sshpass and uses SSHPASS env var (safer than command-line args)
+        - SSH keys should have permissions 600 (owner read/write only)
+        - Local files are ONLY deleted after successful remote transfer verification
     """
+    # Validate local path exists
     if not os.path.exists(local_path):
         logger.warning(f"Upload skipped - path doesn't exist: {local_path}")
         return False
     
-    subset_name = os.path.basename(local_path)
-    remote_full_path = os.path.join(remote_base_path, subset_name)
+    # Validate auth method
+    auth_method: Literal['password', 'key'] = remote_auth.get('method')  # type: ignore
+    auth_value = remote_auth.get('value', '')
     
-    # Pre-validate auth method
-    if remote_auth['method'] not in ('password', 'key'):
-        raise ValueError(f"Invalid auth method: {remote_auth['method']}. Must be 'password' or 'key'")
+    if auth_method not in ('password', 'key'):
+        raise ValueError(f"Invalid auth method: {auth_method}. Must be 'password' or 'key'")
     
-    if remote_auth['method'] == 'key' and not os.path.exists(remote_auth['value']):
-        raise FileNotFoundError(f"SSH key not found: {remote_auth['value']}")
-
+    if auth_method == 'key':
+        if not os.path.exists(auth_value):
+            raise FileNotFoundError(f"SSH key not found: {auth_value}")
+        # Security: warn if key permissions are too permissive
+        key_stat = os.stat(auth_value)
+        if key_stat.st_mode & 0o077:
+            logger.warning(
+                f"SSH key permissions too open: {auth_value} (mode={oct(key_stat.st_mode & 0o777)}). "
+                "Recommended: chmod 600 {auth_value}"
+            )
+    else:  # password auth
+        if not shutil.which('sshpass'):
+            raise RuntimeError("sshpass not found. Install it or use SSH key authentication.")
+    
+    # Compute relative path under SAVE_ROOT for remote hierarchy preservation
+    try:
+        subset_relpath = os.path.relpath(local_path, SAVE_ROOT)
+        if subset_relpath.startswith('..') or subset_relpath == '.':
+            raise ValueError(f"local_path '{local_path}' is not under SAVE_ROOT '{SAVE_ROOT}'")
+    except Exception as e:
+        logger.error(f"Failed to compute relative path: {e}")
+        subset_relpath = os.path.basename(local_path)
+    
+    remote_full_path = os.path.join(remote_path, subset_relpath)
+    logger.info(f"Upload target: {subset_relpath} -> {remote_user}@{remote_ip}:{remote_full_path}")
+    
+    # Retry loop
     for attempt in range(1, max_retries + 1):
-        logger.info(f"Upload attempt {attempt}/{max_retries} for {subset_name} -> {remote_user}@{remote_ip}:{remote_full_path}")
+        logger.info(f"Upload attempt {attempt}/{max_retries} for {subset_relpath}")
+        error_msg = ""
         
         try:
             # === STEP 1: Create remote directory ===
-            if remote_auth['method'] == 'password':
-                # SAFER: Use SSHPASS env var instead of -p flag (avoids ps leakage)
-                mkdir_cmd = [
-                    'sshpass', '-e', 'ssh',
-                    '-o', 'StrictHostKeyChecking=no',
-                    '-o', 'ConnectTimeout=10',
-                    f'{remote_user}@{remote_ip}',
-                    f'mkdir -p {shlex.quote(remote_full_path)}'
-                ]
+            mkdir_cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+            env = None
+            
+            if auth_method == 'password':
+                mkdir_cmd = ['sshpass', '-e'] + mkdir_cmd
                 env = os.environ.copy()
-                env['SSHPASS'] = remote_auth['value']
+                env['SSHPASS'] = auth_value
             else:  # key auth
-                mkdir_cmd = [
-                    'ssh',
-                    '-i', remote_auth['value'],
-                    '-o', 'StrictHostKeyChecking=no',
-                    '-o', 'ConnectTimeout=10',
-                    f'{remote_user}@{remote_ip}',
-                    f'mkdir -p {shlex.quote(remote_full_path)}'
-                ]
-                env = None
+                mkdir_cmd += ['-i', auth_value]
+            
+            mkdir_cmd += [
+                f'{remote_user}@{remote_ip}',
+                f'mkdir -p {shlex.quote(remote_full_path)}'
+            ]
             
             subprocess.run(
                 mkdir_cmd,
                 env=env,
-                check=True,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                check=True
             )
+            logger.debug(f"Remote directory created: {remote_full_path}")
             
-            # === STEP 2: Rsync data ===
-            if remote_auth['method'] == 'password':
-                rsync_cmd = [
-                    'sshpass', '-e', 'rsync',
-                    '-avz',
-                    '--progress',
-                    '--exclude=finish.keep',
-                    '--rsh=ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10',
-                    f'{local_path}/',
-                    f'{remote_user}@{remote_ip}:{remote_full_path}/'
+            # === STEP 2: Rsync transfer ===
+            rsync_cmd = ['rsync', '-avz', '--exclude=finish.keep']
+            env = None
+            
+            if auth_method == 'password':
+                rsync_cmd = ['sshpass', '-e'] + rsync_cmd
+                rsync_cmd += [
+                    '-e', 'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10',
+                    f'{local_path.rstrip("/")}/',
+                    f'{remote_user}@{remote_ip}:{remote_full_path.rstrip("/")}/'
                 ]
                 env = os.environ.copy()
-                env['SSHPASS'] = remote_auth['value']
+                env['SSHPASS'] = auth_value
             else:  # key auth
-                rsync_cmd = [
-                    'rsync',
-                    '-avz',
-                    '--progress',
-                    '--exclude=finish.keep',
-                    '-e', f'ssh -i {shlex.quote(remote_auth["value"])} -o StrictHostKeyChecking=no -o ConnectTimeout=10',
-                    f'{local_path}/',
-                    f'{remote_user}@{remote_ip}:{remote_full_path}/'
+                rsync_cmd += [
+                    '-e', f'ssh -i {shlex.quote(auth_value)} -o StrictHostKeyChecking=no -o ConnectTimeout=10',
+                    f'{local_path.rstrip("/")}/',
+                    f'{remote_user}@{remote_ip}:{remote_full_path.rstrip("/")}/'
                 ]
-                env = None
             
             # Stream rsync output with minimal noise
             process = subprocess.Popen(
@@ -316,23 +209,51 @@ def upload_and_cleanup(
                 bufsize=1
             )
             
-            for line in process.stdout:
+            noise_patterns = {
+                'sending incremental file list', 'building file list',
+                'total:', 'speedup is', 'bytes/sec'
+            }
+            
+            for line in process.stdout or []:
                 stripped = line.strip()
-                if stripped and not any(noise in stripped for noise in [
-                    'sending incremental file list', 'total:', 'speedup is', 'bytes/sec', '^M'
-                ]):
+                if stripped and not any(pat in stripped for pat in noise_patterns):
                     logger.debug(f"RSYNC: {stripped}")
             
             ret = process.wait(timeout=3600)
             if ret != 0:
                 raise RuntimeError(f"RSYNC failed with exit code {ret}")
+            logger.debug("RSYNC transfer completed successfully")
             
-            # === SUCCESS: Perform cleanup ===
-            logger.info(f"✓ Upload succeeded for {subset_name} on attempt {attempt}")
+            # === STEP 3: Verify remote files exist before cleanup ===
+            verify_cmd = ['ssh', '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10']
+            env = None
             
-            # Remove local files (keep directory structure)
+            if auth_method == 'password':
+                verify_cmd = ['sshpass', '-e'] + verify_cmd
+                env = os.environ.copy()
+                env['SSHPASS'] = auth_value
+            else:
+                verify_cmd += ['-i', auth_value]
+            
+            verify_cmd += [
+                f'{remote_user}@{remote_ip}',
+                f'test -d {shlex.quote(remote_full_path)} && find {shlex.quote(remote_full_path)} -type f 2>/dev/null | head -1'
+            ]
+            
+            result = subprocess.run(
+                verify_cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                raise RuntimeError("Remote verification failed: no files found on destination")
+            logger.debug("Remote verification succeeded")
+            
+            # === STEP 4: Cleanup local files (only after successful verification) ===
             removed_count = 0
-            for root, dirs, files in os.walk(local_path):
+            for root, _, files in os.walk(local_path):
                 for file in files:
                     if file == "finish.keep":
                         continue
@@ -349,29 +270,37 @@ def upload_and_cleanup(
                 f.write(f"Upload completed at: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Source: {local_path}\n")
                 f.write(f"Destination: {remote_user}@{remote_ip}:{remote_full_path}\n")
-                f.write(f"Auth method: {remote_auth['method']}\n")
+                f.write(f"Auth method: {auth_method}\n")
                 f.write(f"Files removed: {removed_count}\n")
                 f.write(f"Upload attempts: {attempt}/{max_retries}\n")
             
-            logger.info(f"✓ Cleanup complete. Created marker: {marker_path} ({removed_count} files removed)")
+            logger.info(
+                f"✓ Upload & cleanup succeeded for {subset_relpath} on attempt {attempt} "
+                f"({removed_count} files removed, marker: {marker_path})"
+            )
             return True
             
         except subprocess.TimeoutExpired as e:
-            error_msg = f"Timeout after {e.timeout}s"
+            error_msg = f"Timeout after {e.timeout}s during {e.cmd[0] if hasattr(e, 'cmd') else 'operation'}"
         except subprocess.CalledProcessError as e:
-            error_msg = f"Command failed (exit {e.returncode}): {e.stderr[:300] if e.stderr else 'no stderr'}"
+            error_msg = f"Command failed (exit {e.returncode}): {e.stderr.strip() if e.stderr else e.stdout.strip() if e.stdout else 'no output'}"
         except Exception as e:
-            error_msg = f"{type(e).__name__}: {str(e)[:300]}"
+            error_msg = f"{type(e).__name__}: {str(e)}"
         
-        logger.warning(f"Upload attempt {attempt} failed for {subset_name}: {error_msg}")
+        logger.warning(f"Upload attempt {attempt} failed for {subset_relpath}: {error_msg}")
         
         if attempt < max_retries:
             backoff = min(2 ** (attempt - 1), 30)  # Exponential backoff capped at 30s
             logger.info(f"Retrying in {backoff}s...")
             time.sleep(backoff)
         else:
-            logger.error(f"✗ All {max_retries} upload attempts failed for {subset_name}. SKIPPING cleanup.")
+            logger.error(
+                f"✗ All {max_retries} upload attempts failed for {subset_relpath}. "
+                "Local files preserved (no cleanup performed)."
+            )
             return False
+    
+    return False  # Should never reach here
 
 def worker(
     queue: multiprocessing.JoinableQueue,
@@ -437,7 +366,7 @@ def worker(
             duration = time.time() - start_time
             worker_logger.error(f"✗ FAILED {item} after {duration:.1f}s (exit {e.returncode})")
         except Exception as e:
-            worker_logger.exception(f"✗ CRITICAL ERROR rendering {item}")
+            worker_logger.exception(f"✗ CRITICAL ERROR rendering {item}, {e}")
 
         with count.get_lock():
             count.value += 1
@@ -495,7 +424,6 @@ def main():
     args = tyro.cli(Args)
     assert args.split in ['training', 'validation', 'test'], f"Invalid split: {args.split}"
     
-    # Load credentials ONLY if upload is requested
     if args.upload:
         args = load_remote_credentials(args)
         logger.warning("⚠️  Using password-based SSH authentication. For production, use SSH keys.")
@@ -574,23 +502,24 @@ def main():
             logger.info('='*70)
             
             # Render the subset
-            rendered_count = rendering(
-                uids=uids,
-                save_path=save_path,
-                queue=queue,
-                count=count,
-                args=args,
-                subset_idx=subset_idx,
-                total_subsets=len(subset_data),
-                total_objects=total_objects
-            )
+            # rendered_count = rendering(
+            #     uids=uids,
+            #     save_path=save_path,
+            #     queue=queue,
+            #     count=count,
+            #     args=args,
+            #     subset_idx=subset_idx,
+            #     total_subsets=len(subset_data),
+            #     total_objects=total_objects
+            # )
             
             # UPLOAD & CLEANUP (if enabled)
             if args.upload:
                 success = upload_and_cleanup(
                     save_path,
                     args.remote_ip,
-                    args.remote_pwd,
+                    args.remote_user,
+                    args.remote_auth,
                     args.remote_path,
                     max_retries=args.upload_retries
                 )

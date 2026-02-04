@@ -2,6 +2,7 @@ import os
 import re
 from pathlib import Path
 from typing import List
+import json
 
 def get_subset_json_files(path: str, sort_numerically: bool = True) -> List[str]:
     """
@@ -40,3 +41,23 @@ def get_subset_json_files(path: str, sort_numerically: bool = True) -> List[str]
         return [name for _, name in matches]
     else:
         return sorted([name for _, name in matches])
+
+def load_remote_credentials(args):
+    if args.credentials_file == None:
+        args.credentials_file = 'credential.json'
+    with open(os.path.join(args.credentials_file), 'r') as f:
+        credentials = json.load(f)
+
+    if args.remote_ip is None:
+        args.remote_ip = credentials["remote_ip"]
+
+    if args.remote_path is None:
+        args.remote_path = credentials["remote_path"]
+
+    args.remote_auth = credentials["remote_auth"]
+    
+    if args.remote_user is None:
+        args.remote_user = credentials["remote_user"]
+
+    return args
+    

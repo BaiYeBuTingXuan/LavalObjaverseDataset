@@ -480,6 +480,9 @@ def main(args):
                         }
                     )
             
+            if i > 4:
+                continue # TODO: control the progress
+
             # image: 001_003_image.png
             if args.no_rgb:
                 scene.render.filepath = ''  
@@ -587,10 +590,7 @@ if __name__ == "__main__":
         "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
     )
     parser.add_argument("--scale", type=float, default=1)
-    parser.add_argument("--trainset_size", type=int, default=16)
-    parser.add_argument("--testset_size", type=int, default=16)
-
-    parser.add_argument("--image_size", type=tuple, default=(512, 512))
+    parser.add_argument("--image_size", type=tuple, default=(256, 256))
     
     parser.add_argument("--timing", action='store_true')
     parser.add_argument("--depth", action='store_true')

@@ -349,7 +349,7 @@ def worker(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=1800  # 30 min timeout
+                timeout=36000
             )
             duration = time.time() - start_time
             worker_logger.info(f"✓ Rendered {item} in {duration:.1f}s")
@@ -502,16 +502,16 @@ def main():
             logger.info('='*70)
             
             # Render the subset
-            # rendered_count = rendering(
-            #     uids=uids,
-            #     save_path=save_path,
-            #     queue=queue,
-            #     count=count,
-            #     args=args,
-            #     subset_idx=subset_idx,
-            #     total_subsets=len(subset_data),
-            #     total_objects=total_objects
-            # )
+            rendered_count = rendering(
+                uids=uids,
+                save_path=save_path,
+                queue=queue,
+                count=count,
+                args=args,
+                subset_idx=subset_idx,
+                total_subsets=len(subset_data),
+                total_objects=total_objects
+            )
             
             # UPLOAD & CLEANUP (if enabled)
             if args.upload:

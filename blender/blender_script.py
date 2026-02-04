@@ -664,3 +664,5 @@ if __name__ == "__main__":
     timing = main(args)
     if timing is not None:
         print(timing)
+
+# CUDA_VISIBLE_DEVICES=0 ./blender/blender-4.3.2-linux-x64/blender -b -P ./blender/blender_script.py -- --object_name 2dca2c61c96b40bd885e46eae324fc62 --output_dir '/home/user/Documents/research/LavalObjaverseDataset/rendered/training/subset_0' --depth --lighting_split training --view_split training  --skip_exist

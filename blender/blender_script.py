@@ -501,9 +501,7 @@ def main(args):
                                 continue                               
                         else:
                             continue
-                    else:
-                        raise ValueError(f"The image size is {width}x{height} pixels, \
-                                            not {render.resolution_x}x{render.resolution_x}")
+                        
             # normal: V1_normal_*.png
             # albedo: V1_albedo_*.png
             # depth: V1_depth_*.exr

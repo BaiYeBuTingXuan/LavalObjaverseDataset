@@ -501,7 +501,7 @@ def main(args):
                                 continue                               
                         else:
                             continue
-                        
+
             # normal: V1_normal_*.png
             # albedo: V1_albedo_*.png
             # depth: V1_depth_*.exr
@@ -585,7 +585,7 @@ if __name__ == "__main__":
         "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
     )
     parser.add_argument("--scale", type=float, default=1)
-    parser.add_argument("--image_size", type=tuple, default=(256, 256))
+    parser.add_argument("--image_size", type=tuple, default=(512, 512))
     
     parser.add_argument("--timing", action='store_true')
     parser.add_argument("--depth", action='store_true')

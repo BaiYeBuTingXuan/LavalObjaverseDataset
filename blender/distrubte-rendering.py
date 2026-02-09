@@ -502,7 +502,7 @@ def main():
                     
             logger.info(f"Found {len(subsets)} training subsets ({total_objects} total objects)")
         else:
-            with open(f'{OBJAVERSE_INFO}/full_{args.split}_objects', 'r') as f:
+            with open(f'{OBJAVERSE_INFO}/full_{args.split}_objects.json', 'r') as f:
                 uids = json.load(f)
             save_path = os.path.join(SAVE_ROOT, args.split)
             subset_data = [(args.split, save_path, uids)]

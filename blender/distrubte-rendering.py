@@ -448,7 +448,7 @@ def rendering(uids, save_path, queue, count, args, subset_idx=0, total_subsets=1
 
 def main():
     args = tyro.cli(Args)
-    assert args.split in ['training', 'validation', 'test'], f"Invalid split: {args.split}"
+    assert args.split in ['training', 'validation', 'testing'], f"Invalid split: {args.split}"
     
     if args.upload:
         args = load_remote_credentials(args)

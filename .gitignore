@@ -33,7 +33,7 @@ share/python-wheels/
 # ==============================
 # NEVER commit credentials
 credentials.json
-# credential.json
+credential.json
 credentials*.json
 *.env
 .env*

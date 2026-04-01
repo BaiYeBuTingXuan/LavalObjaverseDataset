@@ -501,9 +501,7 @@ def main(args):
                                 continue                               
                         else:
                             continue
-                    else:
-                        raise ValueError(f"The image size is {width}x{height} pixels, \
-                                            not {render.resolution_x}x{render.resolution_x}")
+
             # normal: V1_normal_*.png
             # albedo: V1_albedo_*.png
             # depth: V1_depth_*.exr
@@ -587,9 +585,6 @@ if __name__ == "__main__":
         "--engine", type=str, default="CYCLES", choices=["CYCLES", "BLENDER_EEVEE"]
     )
     parser.add_argument("--scale", type=float, default=1)
-    parser.add_argument("--trainset_size", type=int, default=16)
-    parser.add_argument("--testset_size", type=int, default=16)
-
     parser.add_argument("--image_size", type=tuple, default=(512, 512))
     
     parser.add_argument("--timing", action='store_true')
@@ -664,3 +659,5 @@ if __name__ == "__main__":
     timing = main(args)
     if timing is not None:
         print(timing)
+
+# CUDA_VISIBLE_DEVICES=0 ./blender/blender-4.3.2-linux-x64/blender -b -P ./blender/blender_script.py -- --object_name 2dca2c61c96b40bd885e46eae324fc62 --output_dir '/home/user/Documents/research/LavalObjaverseDataset/rendered/training/subset_0' --depth --lighting_split training --view_split training  --skip_exist

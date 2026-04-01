@@ -307,6 +307,7 @@ def worker(
     count: multiprocessing.Value,
     gpu: int,
     args,
+    max_retries = 3
 ) -> None:
     worker_logger = logging.getLogger(f"worker.gpu{gpu}.{os.getpid()}")
     
@@ -341,32 +342,57 @@ def worker(
             command += " --skip_exist"
 
         start_time = time.time()
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=36000
-            )
-            duration = time.time() - start_time
-            worker_logger.info(f"✓ Rendered {item} in {duration:.1f}s")
-            
-            # Log non-frame Blender output
-            for line in result.stdout.splitlines():
-                if line.strip() and not line.startswith("Fra:"):
-                    worker_logger.debug(f"[{item}] {line}")
-                        
-        except subprocess.TimeoutExpired:
-            duration = time.time() - start_time
-            worker_logger.error(f"✗ TIMEOUT {item} after {duration:.1f}s")
-        except subprocess.CalledProcessError as e:
-            duration = time.time() - start_time
-            worker_logger.error(f"✗ FAILED {item} after {duration:.1f}s (exit {e.returncode})")
-        except Exception as e:
-            worker_logger.exception(f"✗ CRITICAL ERROR rendering {item}, {e}")
+        retry_delay = 120
+        for attempt in range(1, max_retries + 1):
+            start_time = time.time()
+            try:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=36000
+                )
+                duration = time.time() - start_time
+                worker_logger.info(f"✓ Rendered {item} in {duration:.1f}s")
+
+                # Log non-frame Blender output
+                for line in result.stdout.splitlines():
+                    if line.strip() and not line.startswith("Fra:"):
+                        worker_logger.debug(f"[{item}] {line}")
+
+                # Success — exit retry loop
+                break
+
+            except subprocess.TimeoutExpired:
+                duration = time.time() - start_time
+                worker_logger.warning(f"✗ TIMEOUT on attempt {attempt}/{max_retries} for {item} after {duration:.1f}s")
+                if attempt == max_retries:
+                    worker_logger.error(f"✗ FAILED {item} after {max_retries} attempts due to timeout")
+                else:
+                    worker_logger.info(f"   → Retrying in {retry_delay}s...")
+
+            except subprocess.CalledProcessError as e:
+                duration = time.time() - start_time
+                worker_logger.warning(f"✗ FAILED on attempt {attempt}/{max_retries} for {item} after {duration:.1f}s (exit {e.returncode})")
+                if attempt == max_retries:
+                    worker_logger.error(f"✗ FAILED {item} permanently after {max_retries} attempts (final exit code: {e.returncode})")
+                else:
+                    worker_logger.info(f"   → Retrying in {retry_delay}s...")
+
+            except Exception as e:
+                duration = time.time() - start_time
+                worker_logger.exception(f"✗ CRITICAL ERROR on attempt {attempt}/{max_retries} rendering {item}: {e}")
+                if attempt == max_retries:
+                    worker_logger.error(f"✗ ABORTED {item} after {max_retries} failed attempts due to critical error")
+                else:
+                    worker_logger.info(f"   → Retrying in {retry_delay}s...")
+
+            # Delay before next retry (only if not on final attempt)
+            if attempt < max_retries:
+                time.sleep(retry_delay)
 
         with count.get_lock():
             count.value += 1
@@ -422,7 +448,7 @@ def rendering(uids, save_path, queue, count, args, subset_idx=0, total_subsets=1
 
 def main():
     args = tyro.cli(Args)
-    assert args.split in ['training', 'validation', 'test'], f"Invalid split: {args.split}"
+    assert args.split in ['training', 'validation', 'testing'], f"Invalid split: {args.split}"
     
     if args.upload:
         args = load_remote_credentials(args)
@@ -476,7 +502,7 @@ def main():
                     
             logger.info(f"Found {len(subsets)} training subsets ({total_objects} total objects)")
         else:
-            with open(f'{OBJAVERSE_INFO}/full_{args.split}_objects', 'r') as f:
+            with open(f'{OBJAVERSE_INFO}/full_{args.split}_objects.json', 'r') as f:
                 uids = json.load(f)
             save_path = os.path.join(SAVE_ROOT, args.split)
             subset_data = [(args.split, save_path, uids)]

@@ -61,6 +61,10 @@ class Args:
     upload: bool = True
     """Upload rendered subsets to remote server after completion"""
 
+    download: bool = False
+    """If True, sync rendered data from remote BEFORE rendering. 
+       Deletes info.json to allow re-rendering of already-completed objects."""
+
     upload_retries: int = 3
     """Number of retry attempts for failed uploads"""
 
@@ -302,6 +306,142 @@ def upload_and_cleanup(
     
     return False  # Should never reach here
 
+def download_from_remote(
+    local_path: str,
+    remote_ip: str,
+    remote_user: str,
+    remote_auth: Dict[str, str],
+    remote_path: str,
+    max_retries: int = 3
+) -> bool:
+    """
+    Download rendered subset from remote server to local machine.
+    Uses rsync over SSH with support for password/key authentication.
+    
+    Args:
+        local_path: Local directory to download TO
+        remote_ip: Remote server IP/hostname
+        remote_user: Remote username
+        remote_auth: {'method': 'password'/'key', 'value': pwd_or_key_path}
+        remote_path: Base remote path (subset hierarchy preserved)
+        max_retries: Maximum download attempts
+    
+    Returns:
+        True on success, False if all retries fail.
+    """
+    if not os.path.exists(local_path):
+        os.makedirs(local_path, exist_ok=True)
+    
+    # Compute relative path for remote hierarchy
+    try:
+        subset_relpath = os.path.relpath(local_path, SAVE_ROOT)
+        if subset_relpath.startswith('..') or subset_relpath == '.':
+            raise ValueError(f"local_path '{local_path}' is not under SAVE_ROOT '{SAVE_ROOT}'")
+    except Exception as e:
+        logger.error(f"Failed to compute relative path: {e}")
+        subset_relpath = os.path.basename(local_path)
+    
+    remote_full_path = os.path.join(remote_path, subset_relpath)
+    logger.info(f"Download source: {remote_user}@{remote_ip}:{remote_full_path} -> {local_path}")
+    
+    auth_method: Literal['password', 'key'] = remote_auth.get('method')  # type: ignore
+    auth_value = remote_auth.get('value', '')
+    
+    for attempt in range(1, max_retries + 1):
+        logger.info(f"Download attempt {attempt}/{max_retries} for {subset_relpath}")
+        error_msg = ""
+        
+        try:
+            # === RSYNC DOWNLOAD ===
+            rsync_cmd = ['rsync', '-avz', '--exclude=finish.keep']
+            env = None
+            
+            if auth_method == 'password':
+                if not shutil.which('sshpass'):
+                    raise RuntimeError("sshpass not found. Install it or use SSH key authentication.")
+                rsync_cmd = ['sshpass', '-e'] + rsync_cmd
+                rsync_cmd += [
+                    '-e', 'ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10',
+                    f'{remote_user}@{remote_ip}:{remote_full_path.rstrip("/")}/',
+                    f'{local_path.rstrip("/")}/'
+                ]
+                env = os.environ.copy()
+                env['SSHPASS'] = auth_value
+            else:  # key auth
+                if not os.path.exists(auth_value):
+                    raise FileNotFoundError(f"SSH key not found: {auth_value}")
+                rsync_cmd += [
+                    '-e', f'ssh -i {shlex.quote(auth_value)} -o StrictHostKeyChecking=no -o ConnectTimeout=10',
+                    f'{remote_user}@{remote_ip}:{remote_full_path.rstrip("/")}/',
+                    f'{local_path.rstrip("/")}/'
+                ]
+            
+            # Stream rsync output
+            process = subprocess.Popen(
+                rsync_cmd,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            
+            noise_patterns = {'sending incremental file list', 'building file list', 'total:', 'speedup is', 'bytes/sec'}
+            for line in process.stdout or []:
+                stripped = line.strip()
+                if stripped and not any(pat in stripped for pat in noise_patterns):
+                    logger.debug(f"RSYNC-DL: {stripped}")
+            
+            ret = process.wait(timeout=3600)
+            if ret != 0:
+                raise RuntimeError(f"RSYNC download failed with exit code {ret}")
+            
+            logger.info(f"✓ Download succeeded for {subset_relpath} (attempt {attempt})")
+            return True
+            
+        except subprocess.TimeoutExpired as e:
+            error_msg = f"Timeout after {e.timeout}s"
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Command failed (exit {e.returncode}): {e.stderr.strip() if e.stderr else 'no output'}"
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}"
+        
+        logger.warning(f"Download attempt {attempt} failed for {subset_relpath}: {error_msg}")
+        
+        if attempt < max_retries:
+            backoff = min(2 ** (attempt - 1), 30)
+            logger.info(f"Retrying in {backoff}s...")
+            time.sleep(backoff)
+        else:
+            logger.error(f"✗ All {max_retries} download attempts failed for {subset_relpath}")
+            return False
+    
+    return False
+
+def cleanup_info_json(directory: str) -> int:
+    """
+    Recursively delete all info.json files under directory.
+    This allows blender script to re-render objects that were previously completed.
+    
+    Returns:
+        Number of info.json files deleted.
+    """
+    deleted_count = 0
+    for root, dirs, files in os.walk(directory):
+        if 'info.json' in files:
+            info_path = os.path.join(root, 'info.json')
+            try:
+                os.remove(info_path)
+                deleted_count += 1
+                logger.debug(f"Removed: {info_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove {info_path}: {e}")
+    
+    if deleted_count > 0:
+        logger.info(f"Cleaned up {deleted_count} info.json files in {directory}")
+    return deleted_count
+
+
 def worker(
     queue: multiprocessing.JoinableQueue,
     count: multiprocessing.Value,
@@ -521,11 +661,31 @@ def main():
             if args.skip_exist and os.path.exists(marker_path):
                 logger.info(f"✓ Skipping {subset_name} (finish.keep exists at {marker_path})")
                 continue
-            
-            logger.info(f"\n{'='*70}")
-            logger.info(f"PROCESSING SUBSET {subset_idx+1}/{len(subset_data)}: {subset_name}")
-            logger.info(f"Objects: {len(uids)} | Path: {save_path}")
-            logger.info('='*70)
+
+            # 🔽 NEW: Download from remote if enabled
+        if args.download and args.upload:  # download requires remote credentials
+            logger.info(f"📥 Downloading {subset_name} from remote before rendering...")
+            download_success = download_from_remote(
+                save_path,
+                args.remote_ip,
+                args.remote_user,
+                args.remote_auth,
+                args.remote_path,
+                max_retries=args.upload_retries
+            )
+
+            if download_success:
+                # Delete info.json to allow re-rendering of completed objects
+                cleaned = cleanup_info_json(save_path)
+                logger.info(f"✓ Downloaded {subset_name} ({cleaned} info.json files removed for re-render check)")
+            else:
+                logger.warning(f"⚠️  Download failed for {subset_name}, continuing with local-only rendering...")
+
+                
+                logger.info(f"\n{'='*70}")
+                logger.info(f"PROCESSING SUBSET {subset_idx+1}/{len(subset_data)}: {subset_name}")
+                logger.info(f"Objects: {len(uids)} | Path: {save_path}")
+                logger.info('='*70)
             
             # Render the subset
             rendered_count = rendering(
